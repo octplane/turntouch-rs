@@ -1,0 +1,32 @@
+# Turn Touch configuration
+# Place this file at ~/.config/turntouch/config.toml
+#
+# Each direction (north, east, west, south) supports three event types:
+#   press  - single button press
+#   double - double tap (within 250ms)
+#   hold   - long press
+#
+# Commands are run via `sh -c` with these environment variables:
+#   TT_DIRECTION - north, east, west, south
+#   TT_EVENT     - press, double, hold
+
+[north]
+press = "echo 'North pressed'"
+double = "echo 'North double-tapped'"
+hold = "echo 'North held'"
+
+[east]
+press = "echo 'East pressed'"
+# double = ""
+# hold = ""
+
+[west]
+press = "echo 'West pressed'"
+
+[south]
+press = "echo 'South pressed'"
+
+# Multi-button press (2+ buttons simultaneously)
+# Environment variables: TT_DIRECTION=north+east+west+south TT_EVENT=multi
+[multi]
+press = "echo 'Multi-button press: $TT_DIRECTION'"
