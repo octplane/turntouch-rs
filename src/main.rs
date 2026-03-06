@@ -180,10 +180,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut detector = EventDetector::new();
         let mut notification_stream = peripheral.notifications().await?;
-        let disconnected;
 
         // Also listen for adapter-level disconnect events
         let mut adapter_events = adapter.events().await?;
+
+        // Periodic connectivity check — after macOS sleep/wake, BLE streams
+        // can silently hang without delivering disconnect events.
+        let mut check_interval = time::interval(Duration::from_secs(10));
+        check_interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+
+        let disconnect_reason;
 
         loop {
             tokio::select! {
@@ -197,8 +203,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         Some(_) => {}
                         None => {
-                            warn!("Notification stream ended (connection lost)");
-                            disconnected = true;
+                            disconnect_reason = "notification stream ended";
                             break;
                         }
                     }
@@ -209,13 +214,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let Ok(Some(props)) = p.properties().await {
                                 if let Some(ref pname) = props.local_name {
                                     if pname.contains(DEVICE_NAME_PREFIX) {
-                                        warn!("Turn Touch disconnected");
-                                        disconnected = true;
+                                        disconnect_reason = "disconnect event received";
                                         break;
                                     }
                                 }
                             }
                         }
+                    }
+                }
+                _ = check_interval.tick() => {
+                    if !peripheral.is_connected().await.unwrap_or(false) {
+                        disconnect_reason = "connectivity check failed";
+                        break;
                     }
                 }
                 _ = tokio::signal::ctrl_c() => {
@@ -226,11 +236,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        if disconnected {
-            let _ = peripheral.disconnect().await;
-            info!("Will reconnect in 3 seconds...");
-            time::sleep(Duration::from_secs(3)).await;
-        }
+        warn!("Connection lost ({disconnect_reason}). Reconnecting...");
+        let _ = peripheral.disconnect().await;
+        time::sleep(Duration::from_secs(3)).await;
     }
 }
 
