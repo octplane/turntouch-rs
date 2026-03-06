@@ -9,12 +9,7 @@ pub fn run_command(config: &Config, event: &ButtonEvent) {
     match config.command_for(event) {
         Some(cmd) => {
             tracing::info!("Event {event} -> running: {cmd}");
-            match Command::new("sh")
-                .arg("-c")
-                .arg(cmd)
-                .envs(&env)
-                .spawn()
-            {
+            match Command::new("sh").arg("-c").arg(cmd).envs(&env).spawn() {
                 Ok(mut child) => {
                     // Fire and forget — don't block the BLE event loop.
                     // Log exit status in background.
