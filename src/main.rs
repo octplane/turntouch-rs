@@ -91,17 +91,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Config path: {}", Config::config_path().display());
 
-    let manager = Manager::new().await?;
-    let adapters = manager.adapters().await?;
-    let adapter = adapters
-        .into_iter()
-        .next()
-        .ok_or("No Bluetooth adapter found")?;
-
-    info!("Using adapter: {:?}", adapter.adapter_info().await?);
-
     // Outer loop: scan → connect → listen, reconnect on disconnect
     loop {
+        let manager = Manager::new().await?;
+        let adapters = manager.adapters().await?;
+        let adapter = adapters
+            .into_iter()
+            .next()
+            .ok_or("No Bluetooth adapter found")?;
+
+        info!("Using adapter: {:?}", adapter.adapter_info().await?);
         info!("Scanning for Turn Touch remote...");
 
         let mut events = adapter.events().await?;
@@ -136,7 +135,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("Found: {name}");
 
         info!("Connecting...");
-        if let Err(e) = peripheral.connect().await {
+        // abort connection after 10s if not connected
+        let connect_timeout = time::timeout(Duration::from_secs(10), peripheral.connect()).await;
+        if let Ok(Err(e)) = connect_timeout {
             warn!("Failed to connect: {e}. Retrying...");
             time::sleep(Duration::from_secs(2)).await;
             continue;
@@ -237,8 +238,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         warn!("Connection lost ({disconnect_reason}). Reconnecting...");
-        let _ = peripheral.disconnect().await;
-        time::sleep(Duration::from_secs(3)).await;
+        // disconnect with a 3s timeout
+        let _disconnect_timeout =
+            time::timeout(Duration::from_secs(3), peripheral.disconnect()).await;
+        // if let Ok(Err(e)) = disconnect_timeout {
+        //     warn!("Failed to disconnect: {e}. Retrying...");
+        //     time::sleep(Duration::from_secs(2)).await;
+        //     continue;
+        // }
+        warn!("Disconnected from peripheral");
     }
 }
 
