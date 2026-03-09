@@ -91,17 +91,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Config path: {}", Config::config_path().display());
 
-    let manager = Manager::new().await?;
-    let adapters = manager.adapters().await?;
-    let adapter = adapters
-        .into_iter()
-        .next()
-        .ok_or("No Bluetooth adapter found")?;
-
-    info!("Using adapter: {:?}", adapter.adapter_info().await?);
-
     // Outer loop: scan → connect → listen, reconnect on disconnect
     loop {
+        let manager = Manager::new().await?;
+        let adapters = manager.adapters().await?;
+        let adapter = adapters
+            .into_iter()
+            .next()
+            .ok_or("No Bluetooth adapter found")?;
+
+        info!("Using adapter: {:?}", adapter.adapter_info().await?);
         info!("Scanning for Turn Touch remote...");
 
         let mut events = adapter.events().await?;
@@ -136,7 +135,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("Found: {name}");
 
         info!("Connecting...");
-        if let Err(e) = peripheral.connect().await {
+        // abort connection after 10s if not connected
+        let connect_timeout = time::timeout(Duration::from_secs(10), peripheral.connect()).await;
+        if let Ok(Err(e)) = connect_timeout {
             warn!("Failed to connect: {e}. Retrying...");
             time::sleep(Duration::from_secs(2)).await;
             continue;
@@ -180,10 +181,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut detector = EventDetector::new();
         let mut notification_stream = peripheral.notifications().await?;
-        let disconnected;
 
         // Also listen for adapter-level disconnect events
         let mut adapter_events = adapter.events().await?;
+
+        // Periodic connectivity check — after macOS sleep/wake, BLE streams
+        // can silently hang without delivering disconnect events.
+        let mut check_interval = time::interval(Duration::from_secs(10));
+        check_interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+
+        let disconnect_reason;
 
         loop {
             tokio::select! {
@@ -197,8 +204,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         Some(_) => {}
                         None => {
-                            warn!("Notification stream ended (connection lost)");
-                            disconnected = true;
+                            disconnect_reason = "notification stream ended";
                             break;
                         }
                     }
@@ -209,13 +215,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let Ok(Some(props)) = p.properties().await {
                                 if let Some(ref pname) = props.local_name {
                                     if pname.contains(DEVICE_NAME_PREFIX) {
-                                        warn!("Turn Touch disconnected");
-                                        disconnected = true;
+                                        disconnect_reason = "disconnect event received";
                                         break;
                                     }
                                 }
                             }
                         }
+                    }
+                }
+                _ = check_interval.tick() => {
+                    if !peripheral.is_connected().await.unwrap_or(false) {
+                        disconnect_reason = "connectivity check failed";
+                        break;
                     }
                 }
                 _ = tokio::signal::ctrl_c() => {
@@ -226,11 +237,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        if disconnected {
-            let _ = peripheral.disconnect().await;
-            info!("Will reconnect in 3 seconds...");
-            time::sleep(Duration::from_secs(3)).await;
-        }
+        warn!("Connection lost ({disconnect_reason}). Reconnecting...");
+        // disconnect with a 3s timeout
+        let _disconnect_timeout =
+            time::timeout(Duration::from_secs(3), peripheral.disconnect()).await;
+        // if let Ok(Err(e)) = disconnect_timeout {
+        //     warn!("Failed to disconnect: {e}. Retrying...");
+        //     time::sleep(Duration::from_secs(2)).await;
+        //     continue;
+        // }
+        warn!("Disconnected from peripheral");
     }
 }
 
